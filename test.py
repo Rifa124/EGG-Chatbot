@@ -1,16 +1,10 @@
-from openai import OpenAI
-from dotenv import load_dotenv
-import os
+from google import genai
 
-load_dotenv()
+client = genai.Client(api_key="YOUR_API_KEY")
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
+response = client.models.generate_content(
+    model="gemini-2.0-flash",
+    contents="Hello"
 )
 
-response = client.responses.create(
-    model="gpt-4.1-mini",
-    input="hello"
-)
-
-print(response.output_text)
+print(response.text)
