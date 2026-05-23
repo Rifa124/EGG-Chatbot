@@ -1,206 +1,152 @@
 import streamlit as st
-import os
-import numpy as np
-import faiss
-
+from groq import Groq
 from dotenv import load_dotenv
-from pypdf import PdfReader
-import google.generativeai as genai
+import os
+from PIL import Image
+import base64
+from PyPDF2 import PdfReader
 
+# Load environment variables
 load_dotenv()
 
-genai.configure(
-    api_key=os.getenv("GEMINI_API_KEY")
+# Groq client
+client = Groq(
+    api_key=os.getenv("GROQ_API_KEY")
 )
 
+# Vision model
+model = "llama-3.2-11b-vision-preview"
+
+# Page configuration
 st.set_page_config(
     page_title="EGG Chatbot",
     layout="wide"
 )
 
-st.title("EGG Chatbot")
-st.subheader("Eco Gas System AI Assistant")
+# Custom styling
+st.markdown("""
+<style>
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+.main {
+    background-color: #0E1117;
+}
 
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
+h1 {
+    text-align: center;
+    color: white;
+}
 
-if "index" not in st.session_state:
-    st.session_state.index = None
+.stChatMessage {
+    border-radius: 15px;
+    padding: 10px;
+}
 
+section[data-testid="stSidebar"] {
+    background-color: #161A23;
+}
 
-def extract_pdf_text(pdf_file):
+.stChatInput input {
+    border-radius: 15px;
+}
 
-    text = ""
+</style>
+""", unsafe_allow_html=True)
 
-    reader = PdfReader(pdf_file)
+# Create upload folder
+upload_folder = "uploads"
 
-    for page in reader.pages:
-        text += page.extract_text() or ""
+if not os.path.exists(upload_folder):
+    os.mkdir(upload_folder)
 
-    return text
+# Sidebar
+with st.sidebar:
 
+    st.title("EGG Chatbot")
 
-def chunk_text(text, chunk_size=800, overlap=150):
+    st.markdown("---")
 
-    chunks = []
-
-    start = 0
-
-    while start < len(text):
-
-        end = start + chunk_size
-
-        chunks.append(text[start:end])
-
-        start = end - overlap
-
-    return chunks
-
-
-def get_doc_embedding(text):
-
-    result = genai.embed_content(
-        model="models/embedding-001",
-        content=text,
-        task_type="retrieval_document"
+    uploaded_file = st.file_uploader(
+        "Upload Image or PDF",
+        type=["png", "jpg", "jpeg", "pdf"]
     )
 
-    return result["embedding"]
+    extracted_text = ""
 
+    # Image handling
+    if uploaded_file and uploaded_file.type.startswith("image"):
 
-def get_query_embedding(text):
+        image = Image.open(uploaded_file)
 
-    result = genai.embed_content(
-        model="models/embedding-001",
-        content=text,
-        task_type="retrieval_query"
-    )
-
-    return result["embedding"]
-
-
-def build_index(chunks):
-
-    if len(chunks) == 0:
-        return None
-
-    embeddings = []
-
-    for chunk in chunks:
-
-        try:
-            embedding = get_doc_embedding(chunk)
-
-            embeddings.append(embedding)
-
-        except:
-            continue
-
-    if len(embeddings) == 0:
-        return None
-
-    embeddings_array = np.array(
-        embeddings
-    ).astype("float32")
-
-    dimension = len(embeddings[0])
-
-    index = faiss.IndexFlatL2(dimension)
-
-    index.add(embeddings_array)
-
-    return index
-
-
-def search(query, index, chunks, k=3):
-
-    if index is None:
-        return []
-
-    query_embedding = get_query_embedding(query)
-
-    query_array = np.array(
-        [query_embedding]
-    ).astype("float32")
-
-    _, indices = index.search(query_array, k)
-
-    results = []
-
-    for i in indices[0]:
-
-        if i < len(chunks):
-            results.append(chunks[i])
-
-    return results
-
-
-def get_available_model():
-
-    models = genai.list_models()
-
-    for model in models:
-
-        if "generateContent" in model.supported_generation_methods:
-
-            return model.name
-
-    return None
-
-
-st.sidebar.header("Upload PDF")
-
-pdf_file = st.sidebar.file_uploader(
-    "Choose PDF",
-    type=["pdf"]
-)
-
-if st.sidebar.button("Process PDF"):
-
-    if pdf_file is not None:
-
-        with st.spinner("Processing PDF..."):
-
-            text = extract_pdf_text(pdf_file)
-
-            if text.strip():
-
-                chunks = chunk_text(text)
-
-                st.session_state.chunks = chunks
-
-                st.session_state.index = build_index(chunks)
-
-                st.sidebar.success(
-                    "PDF processed successfully"
-                )
-
-            else:
-
-                st.sidebar.error(
-                    "No readable text found in PDF"
-                )
-
-    else:
-
-        st.sidebar.warning(
-            "Upload a PDF first"
+        st.image(
+            image,
+            caption="Uploaded Image",
+            use_container_width=True
         )
 
+        save_path = os.path.join(
+            upload_folder,
+            uploaded_file.name
+        )
 
-for message in st.session_state.messages:
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
 
-    with st.chat_message(message["role"]):
+        st.success("Image uploaded successfully")
 
-        st.write(message["content"])
+    # PDF handling
+    elif uploaded_file and uploaded_file.type == "application/pdf":
 
+        save_path = os.path.join(
+            upload_folder,
+            uploaded_file.name
+        )
 
-user_input = st.chat_input(
-    "Ask something..."
-)
+        with open(save_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        pdf_reader = PdfReader(save_path)
+
+        for page in pdf_reader.pages:
+
+            text = page.extract_text()
+
+            if text:
+                extracted_text += text + "\n"
+
+        st.success("PDF uploaded successfully")
+
+        st.subheader("Extracted PDF Text")
+
+        st.text_area(
+            "PDF Content",
+            extracted_text,
+            height=300
+        )
+
+# Main title
+st.title("EGG Chatbot")
+
+# Chat memory
+if "messages" not in st.session_state:
+
+    st.session_state.messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that can understand images and PDFs."
+        }
+    ]
+
+# Show chat history
+for msg in st.session_state.messages:
+
+    if msg["role"] != "system":
+
+        with st.chat_message(msg["role"]):
+
+            st.write(msg["content"])
+
+# User input
+user_input = st.chat_input("Type your message")
 
 if user_input:
 
@@ -215,64 +161,83 @@ if user_input:
 
         st.write(user_input)
 
-    context = ""
+    with st.chat_message("assistant"):
 
-    if (
-        st.session_state.index is not None
-        and len(st.session_state.chunks) > 0
-    ):
+        placeholder = st.empty()
 
-        docs = search(
-            user_input,
-            st.session_state.index,
-            st.session_state.chunks
-        )
+        full_response = ""
 
-        context = "\n".join(docs[:3])
+        # Image AI
+        if uploaded_file and uploaded_file.type.startswith("image"):
 
-    if not context:
+            with open(save_path, "rb") as image_file:
 
-        context = "No PDF context available."
+                base64_image = base64.b64encode(
+                    image_file.read()
+                ).decode("utf-8")
 
-    prompt = f"""
-You are EGG Chatbot, an Eco Gas System AI assistant.
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_input
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                stream=True
+            )
 
-Use the PDF context if relevant.
-If there is no context, answer normally.
+        # PDF AI
+        elif uploaded_file and uploaded_file.type == "application/pdf":
 
-Context:
-{context}
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"Here is the PDF content:\n{extracted_text}"
+                    },
+                    {
+                        "role": "user",
+                        "content": user_input
+                    }
+                ],
+                stream=True
+            )
 
-Question:
-{user_input}
-"""
+        # Normal chat
+        else:
 
-    try:
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=st.session_state.messages,
+                stream=True
+            )
 
-        model_name = get_available_model()
+        for chunk in response:
 
-        if model_name is None:
-            raise Exception("No Gemini model available")
+            if chunk.choices[0].delta.content:
 
-        model = genai.GenerativeModel(model_name)
+                full_response += chunk.choices[0].delta.content
 
-        response = model.generate_content(
-            prompt[:30000]
-        )
+                placeholder.markdown(full_response + "▌")
 
-        answer = response.text
-
-    except Exception as e:
-
-        answer = f"Error: {str(e)}"
+        placeholder.markdown(full_response)
 
     st.session_state.messages.append(
         {
             "role": "assistant",
-            "content": answer
+            "content": full_response
         }
     )
-
-    with st.chat_message("assistant"):
-
-        st.write(answer)
